@@ -21,18 +21,28 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Load versions
+        id: versions
         shell: bash
         run: |
           set -euo pipefail
           source versions.env
+          IMAGE_TAG="${VM_VERSION}-${IMAGE_SUFFIX}"
+          ARCHIVE_NAME="vmalert-auth-${IMAGE_TAG}-linux-amd64.tar.gz"
           {
             echo "VM_VERSION=${VM_VERSION}"
             echo "GO_VERSION=${GO_VERSION}"
             echo "ROOT_IMAGE=${ROOT_IMAGE}"
             echo "IMAGE_SUFFIX=${IMAGE_SUFFIX}"
-            echo "IMAGE_TAG=${VM_VERSION}-${IMAGE_SUFFIX}"
-            echo "ARCHIVE_NAME=vmalert-auth-${VM_VERSION}-${IMAGE_SUFFIX}-linux-amd64.tar.gz"
+            echo "IMAGE_TAG=${IMAGE_TAG}"
+            echo "ARCHIVE_NAME=${ARCHIVE_NAME}"
           } >> "${GITHUB_ENV}"
+          {
+            echo "vm_version=${VM_VERSION}"
+            echo "go_version=${GO_VERSION}"
+            echo "root_image=${ROOT_IMAGE}"
+            echo "image_suffix=${IMAGE_SUFFIX}"
+            echo "image_tag=${IMAGE_TAG}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -45,12 +55,12 @@ jobs:
           platforms: linux/amd64
           load: true
           push: false
-          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.versions.outputs.image_tag }}
           build-args: |
-            VM_VERSION=${{ env.VM_VERSION }}
-            GO_VERSION=${{ env.GO_VERSION }}
-            ROOT_IMAGE=${{ env.ROOT_IMAGE }}
-            IMAGE_SUFFIX=${{ env.IMAGE_SUFFIX }}
+            VM_VERSION=${{ steps.versions.outputs.vm_version }}
+            GO_VERSION=${{ steps.versions.outputs.go_version }}
+            ROOT_IMAGE=${{ steps.versions.outputs.root_image }}
+            IMAGE_SUFFIX=${{ steps.versions.outputs.image_suffix }}
 
       - name: Verify version metadata
         shell: bash
