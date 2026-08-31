@@ -1,7 +1,11 @@
-ARG VM_VERSION=v1.150.0
-
-FROM golang:1.26.6-bookworm AS builder
 ARG VM_VERSION
+ARG GO_VERSION
+ARG ROOT_IMAGE
+ARG IMAGE_SUFFIX=custom-nocgo
+
+FROM golang:${GO_VERSION}-bookworm AS builder
+ARG VM_VERSION
+ARG IMAGE_SUFFIX
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
@@ -19,14 +23,14 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       -trimpath \
       -buildvcs=false \
       -tags 'netgo osusergo' \
-      -ldflags "-X 'github.com/VictoriaMetrics/VictoriaMetrics/lib/buildinfo.Version=vmalert-${VM_VERSION}-custom-nocgo'" \
+      -ldflags "-X 'github.com/VictoriaMetrics/VictoriaMetrics/lib/buildinfo.Version=vmalert-${VM_VERSION}-${IMAGE_SUFFIX}'" \
       -o /out/vmalert-prod \
       ./app/vmalert
 
-FROM alpine:3.24.1 AS certs
+FROM ${ROOT_IMAGE} AS certs
 RUN apk update && apk upgrade && apk --update --no-cache add ca-certificates
 
-FROM alpine:3.24.1
+FROM ${ROOT_IMAGE}
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /out/vmalert-prod /vmalert-prod
 EXPOSE 8880
