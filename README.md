@@ -1,72 +1,168 @@
 # vmalert-auth
 
-Custom VictoriaMetrics `vmalert` image based on `v1.150.0` with authenticated HTTP rule source support for:
+Custom VictoriaMetrics `vmalert` image with authenticated HTTP rule-source support using VictoriaMetrics `lib/promauth`.
+
+Current build metadata is centralized in:
+
+```text
+versions.env
+```
+
+Current production image pattern:
+
+```text
+ghcr.io/jionchen/vmalert-auth:<VM_VERSION>-custom-nocgo
+```
+
+For the current repository state this resolves to:
+
+```text
+ghcr.io/jionchen/vmalert-auth:v1.150.0-custom-nocgo
+```
+
+## Why `nocgo`
+
+The target Docker environment previously rejected CGO thread creation with:
+
+```text
+runtime/cgo: pthread_create failed: Operation not permitted
+```
+
+The project therefore intentionally builds Linux amd64 with:
+
+```text
+CGO_ENABLED=0
+-tags 'netgo osusergo'
+```
+
+Do not switch production builds back to CGO just to match upstream's default amd64 build.
+
+## Authenticated HTTP rule source
+
+Create a password file:
+
+```bash
+mkdir -p /data/victoriametrics/victoria-metrics-secrets
+printf '%s' 'your-password' > /data/victoriametrics/victoria-metrics-secrets/rule_password
+chmod 600 /data/victoriametrics/victoria-metrics-secrets/rule_password
+```
+
+Create `rule-source.yml`:
 
 ```yaml
 rule:
-  url: https://alertfusion.xxx/api/vmalert/rules
+  url: http://xx.xx.xx.xx:8091/runtime/v1/vmalert/groups/vmalert-datasource-2/rules
   basic_auth:
-    username: vmalert
-    password_file: /etc/vmalert/secrets/password
+    username: your-username
+    password_file: /etc/victoriametrics/secrets/rule_password
 ```
 
-The implementation reuses VictoriaMetrics `lib/promauth`. The password is read via `password_file`, is not passed on the command line, and password rotation is picked up by `promauth` without restarting vmalert.
-
-## Image
-
-GitHub Actions publishes:
+Run vmalert with:
 
 ```text
-ghcr.io/jionchen/vmalert-auth:v1.150.0-custom
+-rule.auth.config=/victoria-metrics-config/rule/rule-source.yml
 ```
 
-and also creates a `docker load` artifact:
+Do **not** pass `rule-source.yml` to normal `-rule=`. A normal rule file must contain top-level `groups:`.
 
-```text
-vmalert-auth-v1.150.0-custom-linux-amd64.tar.gz
-```
-
-## Run
-
-Create the password file:
-
-```bash
-mkdir -p /etc/vmalert/secrets
-printf '%s' 'your-password' > /etc/vmalert/secrets/password
-chmod 600 /etc/vmalert/secrets/password
-```
-
-Create `/etc/vmalert/rule-source.yml`:
+Example Compose fragment:
 
 ```yaml
-rule:
-  url: https://alertfusion.xxx/api/vmalert/rules
-  basic_auth:
-    username: vmalert
-    password_file: /etc/vmalert/secrets/password
+vmalert:
+  image: ghcr.io/jionchen/vmalert-auth:v1.150.0-custom-nocgo
+  volumes:
+    - /data/victoriametrics/victoria-metrics-config/rule:/victoria-metrics-config/rule:ro
+    - /data/victoriametrics/victoria-metrics-secrets:/etc/victoriametrics/secrets:ro
+  command:
+    - "-rule.auth.config=/victoria-metrics-config/rule/rule-source.yml"
+    - "-configCheckInterval=1m"
+    - "-datasource.url=http://victoriametrics:8428"
 ```
 
-Example Docker run:
+Existing local/public rule sources remain supported with normal `-rule=` flags.
+
+## Repository layout
+
+```text
+versions.env                              centralized upstream/build versions
+Dockerfile                                no-cgo production build
+UPGRADE.md                                human upgrade SOP
+
+overlay/app/vmalert/rule_auth.go         -rule.auth.config implementation
+overlay/app/vmalert/config/fsurl/url.go    authenticated HTTP fetch
+
+scripts/apply-overlay.sh                  applies customization to upstream source
+scripts/upgrade-check.sh                  checks target upstream compatibility
+scripts/set-version.sh                    updates versions.env from target upstream
+scripts/build-local.sh                    builds, tests and exports docker-load package
+scripts/smoke-basic-auth.py               Basic Auth integration test server
+
+skills/vmalert-auth-upgrade/SKILL.md      reusable coding-agent upgrade skill
+.github/workflows/build-image.yml          validate first, then publish image/artifact
+```
+
+## Upgrade upstream VictoriaMetrics
+
+Read:
+
+```text
+UPGRADE.md
+```
+
+Typical flow:
 
 ```bash
-docker run --rm \
-  -p 8880:8880 \
-  -v /etc/vmalert/rule-source.yml:/etc/vmalert/rule-source.yml:ro \
-  -v /etc/vmalert/secrets/password:/etc/vmalert/secrets/password:ro \
-  ghcr.io/jionchen/vmalert-auth:v1.150.0-custom \
-  -rule.auth.config=/etc/vmalert/rule-source.yml \
-  -datasource.url=http://victoriametrics:8428 \
-  -notifier.url=http://alertmanager:9093 \
-  -configCheckInterval=30s
+git checkout -b upgrade-v1.151.0
+
+bash scripts/upgrade-check.sh v1.151.0
+bash scripts/set-version.sh v1.151.0
+
+git diff
+
+bash scripts/build-local.sh
 ```
 
-## Load offline image
+Only after all local gates pass should the change be merged to `main`.
+
+GitHub Actions then performs:
+
+```text
+build image
+  -> verify version
+  -> verify -rule.auth.config
+  -> verify no CGO/dynamic dependency
+  -> Basic Auth + password_file -dryRun
+  -> push immutable image tag
+  -> update latest
+  -> export docker-load artifact + SHA256
+```
+
+## Agent Skill
+
+The repository contains a reusable skill at:
+
+```text
+skills/vmalert-auth-upgrade/SKILL.md
+```
+
+Give that skill to a coding agent when upgrading the upstream VictoriaMetrics version. It defines the required source inspection, overlay rebase rules, build gates, image packaging and rollback information.
+
+## Offline image
+
+GitHub Actions produces:
+
+```text
+vmalert-auth-<VM_VERSION>-custom-nocgo-linux-amd64.tar.gz
+vmalert-auth-<VM_VERSION>-custom-nocgo-linux-amd64.tar.gz.sha256
+```
+
+Load with:
 
 ```bash
-gunzip vmalert-auth-v1.150.0-custom-linux-amd64.tar.gz
-docker load -i vmalert-auth-v1.150.0-custom-linux-amd64.tar
+gunzip vmalert-auth-<version>-linux-amd64.tar.gz
+docker load -i vmalert-auth-<version>-linux-amd64.tar
 ```
 
-## Compatibility
+## Long-term maintenance goal
 
-Existing `-rule=/path/to/rules.yml` and public `-rule=https://...` behavior is preserved. `-rule.auth.config` adds one authenticated HTTP(S) rule source and can be used together with existing `-rule` flags.
+On every upstream upgrade, first check whether VictoriaMetrics has added native authenticated HTTP `-rule` source support with `password_file`. If upstream provides equivalent behavior, prefer the official implementation and retire this overlay.
