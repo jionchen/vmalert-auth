@@ -43,11 +43,46 @@ jobs:
             ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ env.IMAGE_NAME }}:latest
 
+      - name: Pull image
+        run: docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
+
+      - name: Verify version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm "${IMAGE_NAME}:${IMAGE_TAG}" -version 2>&1 | tee version.txt
+          grep -F 'vmalert-v1.150.0-custom' version.txt
+
+      - name: Verify Basic Auth password_file with dryRun
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          python3 scripts/smoke-basic-auth.py &
+          server_pid=$!
+          trap 'kill ${server_pid} || true' EXIT
+          sleep 1
+          printf '%s' 'secret-v1' > smoke/password
+          cat > smoke/rule-source.yml <<'YAML'
+          rule:
+            url: http://host.docker.internal:18080/rules
+            basic_auth:
+              username: vmalert
+              password_file: /etc/vmalert/password
+          YAML
+          docker run --rm \
+            --add-host host.docker.internal:host-gateway \
+            -v "$PWD/smoke/rule-source.yml:/etc/vmalert/rule-source.yml:ro" \
+            -v "$PWD/smoke/password:/etc/vmalert/password:ro" \
+            "${IMAGE_NAME}:${IMAGE_TAG}" \
+            -rule.auth.config=/etc/vmalert/rule-source.yml \
+            -dryRun
+
       - name: Export docker load archive
         shell: bash
         run: |
           set -euo pipefail
-          docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
+          docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" --format '{{.Size}} bytes'
           docker save "${IMAGE_NAME}:${IMAGE_TAG}" | gzip -1 > "${ARCHIVE_NAME}"
           sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
           ls -lh "${ARCHIVE_NAME}" "${ARCHIVE_NAME}.sha256"
