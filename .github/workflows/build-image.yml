@@ -1,0 +1,63 @@
+name: build-vmalert-auth-image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/jionchen/vmalert-auth
+  IMAGE_TAG: v1.150.0-custom
+  ARCHIVE_NAME: vmalert-auth-v1.150.0-custom-linux-amd64.tar.gz
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Export docker load archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
+          docker save "${IMAGE_NAME}:${IMAGE_TAG}" | gzip -1 > "${ARCHIVE_NAME}"
+          sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
+          ls -lh "${ARCHIVE_NAME}" "${ARCHIVE_NAME}.sha256"
+
+      - name: Upload offline image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmalert-auth-docker-load-linux-amd64
+          path: |
+            ${{ env.ARCHIVE_NAME }}
+            ${{ env.ARCHIVE_NAME }}.sha256
+          if-no-files-found: error
+          retention-days: 30
