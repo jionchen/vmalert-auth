@@ -1,0 +1,5 @@
+rule:
+  url: https://alertfusion.xxx/api/vmalert/rules
+  basic_auth:
+    username: vmalert
+    password_file: /etc/vmalert/secrets/password
