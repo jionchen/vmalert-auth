@@ -12,8 +12,6 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/jionchen/vmalert-auth
-  IMAGE_TAG: v1.150.0-custom-nocgo
-  ARCHIVE_NAME: vmalert-auth-v1.150.0-custom-nocgo-linux-amd64.tar.gz
 
 jobs:
   build:
@@ -22,36 +20,50 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          source versions.env
+          {
+            echo "VM_VERSION=${VM_VERSION}"
+            echo "GO_VERSION=${GO_VERSION}"
+            echo "ROOT_IMAGE=${ROOT_IMAGE}"
+            echo "IMAGE_SUFFIX=${IMAGE_SUFFIX}"
+            echo "IMAGE_TAG=${VM_VERSION}-${IMAGE_SUFFIX}"
+            echo "ARCHIVE_NAME=vmalert-auth-${VM_VERSION}-${IMAGE_SUFFIX}-linux-amd64.tar.gz"
+          } >> "${GITHUB_ENV}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push image
+      - name: Build image for validation
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            ${{ env.IMAGE_NAME }}:latest
-
-      - name: Pull image
-        run: docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
+          load: true
+          push: false
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          build-args: |
+            VM_VERSION=${{ env.VM_VERSION }}
+            GO_VERSION=${{ env.GO_VERSION }}
+            ROOT_IMAGE=${{ env.ROOT_IMAGE }}
+            IMAGE_SUFFIX=${{ env.IMAGE_SUFFIX }}
 
       - name: Verify version metadata
         shell: bash
         run: |
           set -euo pipefail
           docker run --rm "${IMAGE_NAME}:${IMAGE_TAG}" -version 2>&1 | tee version.txt
-          grep -F 'vmalert-v1.150.0-custom-nocgo' version.txt
+          grep -F "vmalert-${IMAGE_TAG}" version.txt
+
+      - name: Verify custom flag
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm "${IMAGE_NAME}:${IMAGE_TAG}" -help 2>&1 | grep -F -- '-rule.auth.config'
 
       - name: Verify no cgo dependency
         shell: bash
@@ -91,6 +103,21 @@ jobs:
             "${IMAGE_NAME}:${IMAGE_TAG}" \
             -rule.auth.config=/etc/vmalert/rule-source.yml \
             -dryRun
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish validated image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE_NAME}:${IMAGE_TAG}"
+          docker tag "${IMAGE_NAME}:${IMAGE_TAG}" "${IMAGE_NAME}:latest"
+          docker push "${IMAGE_NAME}:latest"
 
       - name: Export docker load archive
         shell: bash
